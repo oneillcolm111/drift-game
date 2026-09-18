@@ -32,8 +32,8 @@
   }
   #hud span { font-weight: bold; color: #ffd76e; }
   #driftReadout {
-    display: none;
     font-size: 17px;
+    visibility: hidden;
   }
   #driftReadout span { color: #7dffb0; }
   #gameWrap {
@@ -187,6 +187,7 @@
     <div>Score: <span id="score">0</span></div>
     <div>Best: <span id="best">0</span></div>
     <div>Time: <span id="time">60</span>s</div>
+    <div>Speed: <span id="speedEl">0</span> km/h</div>
     <div id="driftReadout">Drift bank: <span id="driftBank">0</span> <span id="comboLabel">x1.0</span></div>
   </div>
   <div id="gameWrap">
@@ -240,6 +241,7 @@ const W = canvas.width, H = canvas.height;
 const scoreEl = document.getElementById('score');
 const bestEl = document.getElementById('best');
 const timeEl = document.getElementById('time');
+const speedEl = document.getElementById('speedEl');
 const driftReadoutEl = document.getElementById('driftReadout');
 const driftBankEl = document.getElementById('driftBank');
 const comboLabelEl = document.getElementById('comboLabel');
@@ -372,43 +374,78 @@ function updateLoopingAudio(speed, isDrifting, slipAngleDeg) {
 }
 
 // ---------------------------------------------------------------------------
-// Track geometry: a closed-loop "stadium oval" — two straights joined by
-// two 180-degree sweeping turns. Static, camera never moves.
+// Track geometry: a closed loop built by walking one "half" of the circuit
+// (a hand-authored chain of straights and left/right sweeping arcs), then
+// mirroring that half through the midpoint of its own two endpoints to
+// build the other half. That mirror is exact for ANY open chain shape —
+// reflecting point p through C = midpoint(p0, pN) always makes the
+// reflected chain continue smoothly from pN and land exactly back on p0 —
+// so the loop is guaranteed closed and tangent-continuous without having
+// to hand-balance turn angles. This lets the "half" contain S-shaped
+// sweeps (alternating left/right arcs that net back to straight) plus a
+// big sweeping end turn, giving a longer course that bends both ways
+// instead of the old single-direction stadium oval.
 // ---------------------------------------------------------------------------
 const ROAD_HALF_WIDTH = 40;
-const TRACK_CENTER = { x: 320, y: 240 };
-const TURN_RADIUS = 130;
-const STRAIGHT_LEN = 220;
-const TOP_Y = 110, BOTTOM_Y = 370;
-const LEFT_CX = 210, RIGHT_CX = 430;
 const POINT_SPACING = 6;
 const VIEW_SCALE = 2.0;
 
-function buildTrack() {
-  const pts = [];
-  const nStraight = Math.round(STRAIGHT_LEN / POINT_SPACING);
-  const turnArcLen = Math.PI * TURN_RADIUS;
-  const nTurn = Math.round(turnArcLen / POINT_SPACING);
+// Positive sweep and negative sweep curve to opposite sides — consecutive
+// segments with opposite signs create a visible S-sweep.
+const HALF_SEGMENTS = [
+  { type: 'straight', length: 90 },
+  { type: 'arc', radius: 170, sweep: -40 },
+  { type: 'arc', radius: 170, sweep: 80 },
+  { type: 'straight', length: 110 },
+  { type: 'arc', radius: 150, sweep: -40 },
+  { type: 'straight', length: 150 },
+  { type: 'arc', radius: 140, sweep: 180 },
+];
 
-  // Top straight: left -> right
-  for (let i = 0; i < nStraight; i++) {
-    const x = LEFT_CX + (RIGHT_CX - LEFT_CX) * (i / nStraight);
-    pts.push({ x, y: TOP_Y });
+function walkStraight(state, pts, length) {
+  const n = Math.max(1, Math.round(length / POINT_SPACING));
+  const cosT = Math.cos(state.heading), sinT = Math.sin(state.heading);
+  for (let i = 0; i < n; i++) {
+    const d = length * (i / n);
+    pts.push({ x: state.x + d * cosT, y: state.y + d * sinT });
   }
-  // Right-hand sweeping turn: center (RIGHT_CX, midY), -90deg -> +90deg
-  for (let i = 0; i < nTurn; i++) {
-    const a = -Math.PI / 2 + Math.PI * (i / nTurn);
-    pts.push({ x: RIGHT_CX + TURN_RADIUS * Math.cos(a), y: TRACK_CENTER.y + TURN_RADIUS * Math.sin(a) });
+  state.x += length * cosT;
+  state.y += length * sinT;
+}
+
+function walkArc(state, pts, radius, sweepDeg) {
+  const sweep = sweepDeg * Math.PI / 180;
+  const s = sweep >= 0 ? 1 : -1;
+  const cx = state.x + s * radius * -Math.sin(state.heading);
+  const cy = state.y + s * radius * Math.cos(state.heading);
+  const a0 = Math.atan2(state.y - cy, state.x - cx);
+  const absSweep = Math.abs(sweep);
+  const n = Math.max(1, Math.round((radius * absSweep) / POINT_SPACING));
+  for (let i = 0; i < n; i++) {
+    const a = a0 + s * absSweep * (i / n);
+    pts.push({ x: cx + radius * Math.cos(a), y: cy + radius * Math.sin(a) });
   }
-  // Bottom straight: right -> left
-  for (let i = 0; i < nStraight; i++) {
-    const x = RIGHT_CX + (LEFT_CX - RIGHT_CX) * (i / nStraight);
-    pts.push({ x, y: BOTTOM_Y });
+  const aEnd = a0 + s * absSweep;
+  state.x = cx + radius * Math.cos(aEnd);
+  state.y = cy + radius * Math.sin(aEnd);
+  state.heading += sweep;
+}
+
+function buildTrack() {
+  const state = { x: 0, y: 0, heading: 0 };
+  const half = [];
+  for (const seg of HALF_SEGMENTS) {
+    if (seg.type === 'straight') walkStraight(state, half, seg.length);
+    else walkArc(state, half, seg.radius, seg.sweep);
   }
-  // Left-hand sweeping turn: center (LEFT_CX, midY), +90deg -> +270deg
-  for (let i = 0; i < nTurn; i++) {
-    const a = Math.PI / 2 + Math.PI * (i / nTurn);
-    pts.push({ x: LEFT_CX + TURN_RADIUS * Math.cos(a), y: TRACK_CENTER.y + TURN_RADIUS * Math.sin(a) });
+  half.push({ x: state.x, y: state.y }); // exact chain endpoint, needed for an exact mirror
+
+  const cx = (half[0].x + half[half.length - 1].x) / 2;
+  const cy = (half[0].y + half[half.length - 1].y) / 2;
+
+  const pts = half.slice();
+  for (let i = 1; i < half.length - 1; i++) {
+    pts.push({ x: 2 * cx - half[i].x, y: 2 * cy - half[i].y });
   }
 
   const n = pts.length;
@@ -453,6 +490,8 @@ const BRAKE_DECEL = 340;
 const REV_ACCEL = 180;
 const COAST_DRAG = 90;
 const MAX_SPEED = 320;
+const CRUISE_SPEED = MAX_SPEED;
+const SPEED_DISPLAY_SCALE = 0.6;
 const MAX_REVERSE_SPEED = 140;
 const MIN_DRIFT_SPEED = 60;
 const GRASS_DRAG_RATE = 3.5;
@@ -460,8 +499,11 @@ const CAR_LENGTH = 20, CAR_WIDTH = 11;
 
 const BASE_RATE = 500;
 const GAME_DURATION = 60;
+const RECOVERY_BONUS_MAX = 60;
+const RECOVERY_TIME_CAP = 3.5;
+const RECOVERY_SPEED_FRAC = 0.92;
 
-let car = { x: 250, y: TOP_Y, heading: 0, vx: 0, vy: 0 };
+let car = { x: trackPoints[0].x, y: trackPoints[0].y, heading: trackPoints[0].angle, vx: 0, vy: 0 };
 let keys = { up: false, down: false, left: false, right: false, hand: false };
 let camAngle = car.heading;
 
@@ -470,6 +512,8 @@ let score = 0;
 let comboMultiplier = 1;
 let currentBank = 0;
 let prevIsDrifting = false;
+let recoveryActive = false;
+let recoveryTimer = 0;
 let gameTimeRemaining = GAME_DURATION;
 
 let trail = []; // { x, y, age }
@@ -563,20 +607,23 @@ restartBtn.addEventListener('click', () => {
 });
 
 function resetGame() {
-  car.x = 250; car.y = TOP_Y; car.heading = 0; car.vx = 0; car.vy = 0;
+  car.x = trackPoints[0].x; car.y = trackPoints[0].y; car.heading = trackPoints[0].angle; car.vx = 0; car.vy = 0;
   camAngle = car.heading;
   keys = { up: false, down: false, left: false, right: false, hand: false };
   score = 0;
   comboMultiplier = 1;
   currentBank = 0;
   prevIsDrifting = false;
+  recoveryActive = false;
+  recoveryTimer = 0;
   gameTimeRemaining = GAME_DURATION;
   trail = [];
   trailSpawnTimer = 0;
   scoreEl.textContent = score;
   bestEl.textContent = best;
   timeEl.textContent = Math.ceil(gameTimeRemaining);
-  driftReadoutEl.style.display = 'none';
+  speedEl.textContent = 0;
+  driftReadoutEl.style.visibility = 'hidden';
   msgEl.textContent = '';
   overlay.classList.remove('show');
   running = true;
@@ -633,7 +680,7 @@ function update(dtSec) {
     if (vLong > 0) vLong = Math.max(0, vLong - COAST_DRAG * dtSec);
     else if (vLong < 0) vLong = Math.min(0, vLong + COAST_DRAG * dtSec);
   }
-  vLong = clamp(vLong, -MAX_REVERSE_SPEED, MAX_SPEED);
+  vLong = clamp(vLong, -MAX_REVERSE_SPEED, CRUISE_SPEED);
 
   const gripRate = keys.hand ? currentDifficulty.gripDrift : currentDifficulty.gripStable;
   vLat *= Math.exp(-gripRate * dtSec);
@@ -653,6 +700,7 @@ function update(dtSec) {
   car.y += car.vy * dtSec;
 
   const speed = Math.hypot(car.vx, car.vy);
+  speedEl.textContent = Math.round(speed * SPEED_DISPLAY_SCALE);
   const velDir = Math.atan2(car.vy, car.vx);
 
   const camTargetAngle = speed > 25 ? velDir : car.heading;
@@ -691,15 +739,37 @@ function update(dtSec) {
       scoreEl.textContent = score;
     }
     currentBank = 0;
+    recoveryActive = true;
+    recoveryTimer = 0;
   }
   prevIsDrifting = isDrifting;
 
+  if (isDrifting) recoveryActive = false;
+
+  if (recoveryActive) {
+    recoveryTimer += dtSec;
+    if (!keys.up) {
+      recoveryActive = false;
+    } else if (speed >= CRUISE_SPEED * RECOVERY_SPEED_FRAC) {
+      const bonus = Math.round((RECOVERY_BONUS_MAX * clamp(1 - recoveryTimer / RECOVERY_TIME_CAP, 0, 1)) / 10) * 10;
+      if (bonus > 0) {
+        score += bonus;
+        scoreEl.textContent = score;
+        showMessage(`+${bonus} QUICK RECOVERY!`, 1100);
+        playDriftChime();
+      }
+      recoveryActive = false;
+    } else if (recoveryTimer >= RECOVERY_TIME_CAP) {
+      recoveryActive = false;
+    }
+  }
+
   if (isDrifting) {
-    driftReadoutEl.style.display = 'flex';
+    driftReadoutEl.style.visibility = 'visible';
     driftBankEl.textContent = Math.round(currentBank);
     comboLabelEl.textContent = `x${comboMultiplier.toFixed(1)}`;
   } else {
-    driftReadoutEl.style.display = 'none';
+    driftReadoutEl.style.visibility = 'hidden';
   }
 
   updateTrail(dtSec, isDrifting, fwd, right);
