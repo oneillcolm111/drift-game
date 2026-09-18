@@ -89,10 +89,6 @@
     height: 70px;
     font-size: 26px;
   }
-  #touchControls #btnHand {
-    font-size: 13px;
-    letter-spacing: 0.5px;
-  }
   #touchControls .pedalCluster {
     display: flex;
     align-items: flex-end;
@@ -198,7 +194,6 @@
         <button id="btnRight" class="touchBtn" aria-label="Steer right">▶</button>
       </div>
       <div class="cluster pedalCluster">
-        <button id="btnHand" class="touchBtn" aria-label="Handbrake">DRIFT</button>
         <div class="pedalStack">
           <button id="btnGas" class="touchBtn" aria-label="Accelerate">▲</button>
           <button id="btnBrake" class="touchBtn" aria-label="Brake / reverse">▼</button>
@@ -207,7 +202,7 @@
     </div>
   </div>
   <div id="msg"></div>
-  <div id="instructions">↑/W accelerate · ↓/S brake/reverse · ←→ / A D steer · Space = handbrake to drift. Hold the slide through the long sweeping corners for big scores — bank it by straightening out cleanly, but running off-track mid-drift cuts your score short! On mobile, use the on-screen wheel/pedal buttons.</div>
+  <div id="instructions">↑/W accelerate · ↓/S brake/reverse · ←→ / A D steer to drift (hold Space for an extra-sharp slide). Hold the slide through the long sweeping corners for big scores — bank it by straightening out cleanly, but running off-track mid-drift cuts your score short! On mobile, use the on-screen wheel/pedal buttons — just steer to drift.</div>
 
   <div id="startOverlay" class="show">
     <h2>🏎️ Drift Circuit</h2>
@@ -260,9 +255,9 @@ const diffBtns = document.querySelectorAll('.diffBtn');
 // Difficulty presets
 // ---------------------------------------------------------------------------
 const DIFFICULTIES = {
-  Easy:   { turnRate: 2.2, gripStable: 9,   gripDrift: 3.0, driftAngleMin: 6  },
-  Normal: { turnRate: 2.6, gripStable: 7.5, gripDrift: 2.0, driftAngleMin: 9  },
-  Hard:   { turnRate: 3.0, gripStable: 6,   gripDrift: 1.2, driftAngleMin: 12 },
+  Easy:   { turnRate: 2.2, gripStable: 9, gripTurn: 5.5, gripDrift: 3.0, driftAngleMin: 5  },
+  Normal: { turnRate: 2.4, gripStable: 8, gripTurn: 4.5, gripDrift: 2.3, driftAngleMin: 7  },
+  Hard:   { turnRate: 2.8, gripStable: 7, gripTurn: 3.2, gripDrift: 1.5, driftAngleMin: 10 },
 };
 let currentDifficultyKey = 'Normal';
 let currentDifficulty = DIFFICULTIES.Normal;
@@ -386,7 +381,7 @@ function updateLoopingAudio(speed, isDrifting, slipAngleDeg) {
 // big sweeping end turn, giving a longer course that bends both ways
 // instead of the old single-direction stadium oval.
 // ---------------------------------------------------------------------------
-const ROAD_HALF_WIDTH = 40;
+const ROAD_HALF_WIDTH = 55;
 const POINT_SPACING = 6;
 const VIEW_SCALE = 2.0;
 
@@ -494,14 +489,14 @@ const CRUISE_SPEED = MAX_SPEED;
 const SPEED_DISPLAY_SCALE = 0.6;
 const MAX_REVERSE_SPEED = 140;
 const MIN_DRIFT_SPEED = 60;
-const GRASS_DRAG_RATE = 3.5;
+const GRASS_DRAG_RATE = 1.8;
 const CAR_LENGTH = 20, CAR_WIDTH = 11;
 
 const BASE_RATE = 500;
 const GAME_DURATION = 60;
 const RECOVERY_BONUS_MAX = 60;
 const RECOVERY_TIME_CAP = 3.5;
-const RECOVERY_SPEED_FRAC = 0.92;
+const RECOVERY_SPEED_FRAC = 0.85;
 
 let car = { x: trackPoints[0].x, y: trackPoints[0].y, heading: trackPoints[0].angle, vx: 0, vy: 0 };
 let keys = { up: false, down: false, left: false, right: false, hand: false };
@@ -564,7 +559,6 @@ const btnLeft = document.getElementById('btnLeft');
 const btnRight = document.getElementById('btnRight');
 const btnGas = document.getElementById('btnGas');
 const btnBrake = document.getElementById('btnBrake');
-const btnHand = document.getElementById('btnHand');
 
 function bindTouchButton(el, onFn, offFn) {
   const down = (e) => { e.preventDefault(); onFn(); };
@@ -578,7 +572,6 @@ bindTouchButton(btnLeft,  () => keys.left = true,  () => keys.left = false);
 bindTouchButton(btnRight, () => keys.right = true, () => keys.right = false);
 bindTouchButton(btnGas,   () => keys.up = true,    () => keys.up = false);
 bindTouchButton(btnBrake, () => keys.down = true,  () => keys.down = false);
-bindTouchButton(btnHand,  () => keys.hand = true,  () => keys.hand = false);
 
 // ---------------------------------------------------------------------------
 // Game lifecycle
@@ -682,7 +675,10 @@ function update(dtSec) {
   }
   vLong = clamp(vLong, -MAX_REVERSE_SPEED, CRUISE_SPEED);
 
-  const gripRate = keys.hand ? currentDifficulty.gripDrift : currentDifficulty.gripStable;
+  let gripRate;
+  if (keys.hand) gripRate = currentDifficulty.gripDrift;
+  else if (keys.left || keys.right) gripRate = currentDifficulty.gripTurn;
+  else gripRate = currentDifficulty.gripStable;
   vLat *= Math.exp(-gripRate * dtSec);
 
   car.vx = vLong * fwd.x + vLat * right.x;
