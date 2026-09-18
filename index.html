@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Drift Circuit</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    overflow-x: hidden;
+  }
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: #12161b;
+    font-family: 'Trebuchet MS', Arial, sans-serif;
+    color: #eaf6ff;
+    user-select: none;
+    padding: 0 10px;
+  }
+  h1 { margin: 14px 0 4px; letter-spacing: 1px; font-size: clamp(20px, 6vw, 28px); }
+  #hud {
+    display: flex;
+    gap: 22px;
+    font-size: 17px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  #hud span { font-weight: bold; color: #ffd76e; }
+  #driftReadout {
+    display: none;
+    font-size: 17px;
+  }
+  #driftReadout span { color: #7dffb0; }
+  canvas {
+    background: linear-gradient(135deg, #3a9d4f 0%, #2f8a44 45%, #256e37 100%);
+    border: 4px solid #123b1f;
+    border-radius: 8px;
+    display: block;
+    width: 100%;
+    max-width: 640px;
+    height: auto;
+    aspect-ratio: 4 / 3;
+    touch-action: none;
+  }
+  #msg {
+    margin-top: 10px;
+    height: 26px;
+    font-size: 18px;
+    font-weight: bold;
+    color: #9fffb0;
+  }
+  #instructions {
+    margin-top: 4px;
+    font-size: 13px;
+    color: #a9e0b6;
+    text-align: center;
+    max-width: 640px;
+  }
+  #overlay, #startOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  #overlay.show, #startOverlay.show { display: flex; }
+  #overlay h2, #startOverlay h2 { font-size: 32px; margin-bottom: 6px; }
+  #overlay button, #startOverlay button {
+    margin-top: 16px;
+    padding: 10px 24px;
+    font-size: 16px;
+    background: #ffd76e;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+  }
+  #overlay button:hover, #startOverlay button:hover { background: #ffe396; }
+  #overlay .secondary, #startOverlay .secondary {
+    background: transparent;
+    color: #cfe8ff;
+    text-decoration: underline;
+    font-weight: normal;
+    font-size: 14px;
+    padding: 4px;
+  }
+  #overlay .secondary:hover, #startOverlay .secondary:hover { background: transparent; color: #ffffff; }
+  #nameInput {
+    margin-top: 14px;
+    padding: 8px 12px;
+    font-size: 16px;
+    border-radius: 6px;
+    border: none;
+    width: 220px;
+    text-align: center;
+  }
+  #diffRow {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .diffBtn {
+    padding: 8px 16px;
+    font-size: 14px;
+    border-radius: 6px;
+    border: 2px solid #2b3a55;
+    background: #1a3348;
+    color: #eaf6ff;
+    cursor: pointer;
+  }
+  .diffBtn.selected {
+    background: #ffd76e;
+    color: #1a1a1a;
+    border-color: #ffd76e;
+  }
+</style>
+</head>
+<body>
+  <h1>🏎️ Drift Circuit</h1>
+  <div id="hud">
+    <div>Score: <span id="score">0</span></div>
+    <div>Best: <span id="best">0</span></div>
+    <div>Time: <span id="time">60</span>s</div>
+    <div id="driftReadout">Drift bank: <span id="driftBank">0</span> <span id="comboLabel">x1.0</span></div>
+  </div>
+  <canvas id="game" width="640" height="480"></canvas>
+  <div id="msg"></div>
+  <div id="instructions">↑/W accelerate · ↓/S brake/reverse · ←→ / A D steer · Space = handbrake to drift. Hold the slide through the long sweeping corners for big scores — bank it by straightening out cleanly, but running off-track mid-drift cuts your score short!</div>
+
+  <div id="startOverlay" class="show">
+    <h2>🏎️ Drift Circuit</h2>
+    <div>Who's driving?</div>
+    <input id="nameInput" type="text" placeholder="Your name" maxlength="16">
+    <div id="diffRow">
+      <button class="diffBtn" data-diff="Easy">Easy</button>
+      <button class="diffBtn selected" data-diff="Normal">Normal</button>
+      <button class="diffBtn" data-diff="Hard">Hard</button>
+    </div>
+    <button id="startBtn">Start Driving</button>
+  </div>
+
+  <div id="overlay">
+    <h2 id="overlayTitle">Time's Up!</h2>
+    <div id="overlayScore" style="font-size:20px;"></div>
+    <button id="restartBtn">Play Again</button>
+    <button id="switchPlayerBtn" class="secondary">Switch player / difficulty</button>
+  </div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const scoreEl = document.getElementById('score');
+const bestEl = document.getElementById('best');
+const timeEl = document.getElementById('time');
+const driftReadoutEl = document.getElementById('driftReadout');
+const driftBankEl = document.getElementById('driftBank');
+const comboLabelEl = document.getElementById('comboLabel');
+const msgEl = document.getElementById('msg');
+const overlay = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlayTitle');
+const overlayScore = document.getElementById('overlayScore');
+const restartBtn = document.getElementById('restartBtn');
+const switchPlayerBtn = document.getElementById('switchPlayerBtn');
+const startOverlay = document.getElementById('startOverlay');
+const nameInput = document.getElementById('nameInput');
+const startBtn = document.getElementById('startBtn');
+const diffBtns = document.querySelectorAll('.diffBtn');
+
+// ---------------------------------------------------------------------------
+// Difficulty presets
+// ---------------------------------------------------------------------------
+const DIFFICULTIES = {
+  Easy:   { turnRate: 2.2, gripStable: 9,   gripDrift: 3.0, driftAngleMin: 6  },
+  Normal: { turnRate: 2.6, gripStable: 7.5, gripDrift: 2.0, driftAngleMin: 9  },
+  Hard:   { turnRate: 3.0, gripStable: 6,   gripDrift: 1.2, driftAngleMin: 12 },
+};
+let currentDifficultyKey = 'Normal';
+let currentDifficulty = DIFFICULTIES.Normal;
+
+function bestScoresMap() {
+  try { return JSON.parse(localStorage.getItem('driftBestByName') || '{}'); }
+  catch (e) { return {}; }
+}
+function getBestForName(name) { return bestScoresMap()[name] || 0; }
+function setBestForName(name, value) {
+  const map = bestScoresMap();
+  map[name] = value;
+  localStorage.setItem('driftBestByName', JSON.stringify(map));
+}
+
+let playerName = localStorage.getItem('driftLastName') || '';
+nameInput.value = playerName;
+let best = 0;
+
+diffBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    diffBtns.forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    currentDifficultyKey = btn.dataset.diff;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audio (Web Audio API, oscillator-based, no external assets)
+// ---------------------------------------------------------------------------
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    audioCtx = new AC();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+function playTone(freq, dur, type, delay, gainVal) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime + (delay || 0);
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.setValueAtTime(freq, t0);
+  gain.gain.setValueAtTime(gainVal || 0.15, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+}
+function playDriftChime() {
+  playTone(660, 0.09, 'triangle', 0, 0.12);
+  playTone(880, 0.09, 'triangle', 0.07, 0.12);
+  playTone(1100, 0.16, 'triangle', 0.14, 0.14);
+}
+function playCrashThud() {
+  playTone(160, 0.18, 'sawtooth', 0, 0.18);
+  playTone(90, 0.28, 'sawtooth', 0.05, 0.16);
+  playTone(50, 0.32, 'triangle', 0.1, 0.12);
+}
+
+// Persistent looping nodes: created once, reused across restarts so we never
+// stack oscillators. Their gains are ramped up/down instead of being
+// recreated or stopped between sessions.
+let engineOsc = null, engineGain = null;
+let screechOsc = null, screechGain = null;
+function ensureLoopingAudio() {
+  if (!audioCtx) return;
+  if (!engineOsc) {
+    engineOsc = audioCtx.createOscillator();
+    engineOsc.type = 'sawtooth';
+    engineOsc.frequency.value = 70;
+    engineGain = audioCtx.createGain();
+    engineGain.gain.value = 0.0001;
+    engineOsc.connect(engineGain);
+    engineGain.connect(audioCtx.destination);
+    engineOsc.start();
+  }
+  if (!screechOsc) {
+    screechOsc = audioCtx.createOscillator();
+    screechOsc.type = 'sawtooth';
+    screechOsc.frequency.value = 260;
+    screechGain = audioCtx.createGain();
+    screechGain.gain.value = 0.0001;
+    screechOsc.connect(screechGain);
+    screechGain.connect(audioCtx.destination);
+    screechOsc.start();
+  }
+}
+function silenceLoopingAudio() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  if (engineGain) engineGain.gain.setTargetAtTime(0.0001, t, 0.15);
+  if (screechGain) screechGain.gain.setTargetAtTime(0.0001, t, 0.15);
+}
+function updateLoopingAudio(speed, isDrifting, slipAngleDeg) {
+  if (!audioCtx || !engineOsc) return;
+  const t = audioCtx.currentTime;
+  const speedFrac = clamp(speed / MAX_SPEED, 0, 1);
+  engineOsc.frequency.setTargetAtTime(70 + speedFrac * 220, t, 0.05);
+  engineGain.gain.setTargetAtTime(0.02 + speedFrac * 0.05, t, 0.1);
+  const screechTarget = isDrifting ? 0.09 : 0.0001;
+  screechGain.gain.setTargetAtTime(screechTarget, t, isDrifting ? 0.05 : 0.25);
+  screechOsc.frequency.setTargetAtTime(220 + Math.min(60, slipAngleDeg) * 1.4, t, 0.1);
+}
+
+// ---------------------------------------------------------------------------
+// Track geometry: a closed-loop "stadium oval" — two straights joined by
+// two 180-degree sweeping turns. Static, camera never moves.
+// ---------------------------------------------------------------------------
+const ROAD_HALF_WIDTH = 40;
+const TRACK_CENTER = { x: 320, y: 240 };
+const TURN_RADIUS = 130;
+const STRAIGHT_LEN = 220;
+const TOP_Y = 110, BOTTOM_Y = 370;
+const LEFT_CX = 210, RIGHT_CX = 430;
+const POINT_SPACING = 6;
+
+function buildTrack() {
+  const pts = [];
+  const nStraight = Math.round(STRAIGHT_LEN / POINT_SPACING);
+  const turnArcLen = Math.PI * TURN_RADIUS;
+  const nTurn = Math.round(turnArcLen / POINT_SPACING);
+
+  // Top straight: left -> right
+  for (let i = 0; i < nStraight; i++) {
+    const x = LEFT_CX + (RIGHT_CX - LEFT_CX) * (i / nStraight);
+    pts.push({ x, y: TOP_Y });
+  }
+  // Right-hand sweeping turn: center (RIGHT_CX, midY), -90deg -> +90deg
+  for (let i = 0; i < nTurn; i++) {
+    const a = -Math.PI / 2 + Math.PI * (i / nTurn);
+    pts.push({ x: RIGHT_CX + TURN_RADIUS * Math.cos(a), y: TRACK_CENTER.y + TURN_RADIUS * Math.sin(a) });
+  }
+  // Bottom straight: right -> left
+  for (let i = 0; i < nStraight; i++) {
+    const x = RIGHT_CX + (LEFT_CX - RIGHT_CX) * (i / nStraight);
+    pts.push({ x, y: BOTTOM_Y });
+  }
+  // Left-hand sweeping turn: center (LEFT_CX, midY), +90deg -> +270deg
+  for (let i = 0; i < nTurn; i++) {
+    const a = Math.PI / 2 + Math.PI * (i / nTurn);
+    pts.push({ x: LEFT_CX + TURN_RADIUS * Math.cos(a), y: TRACK_CENTER.y + TURN_RADIUS * Math.sin(a) });
+  }
+
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const cur = pts[i];
+    const next = pts[(i + 1) % n];
+    cur.angle = Math.atan2(next.y - cur.y, next.x - cur.x);
+  }
+  return pts;
+}
+
+function computeEdges(pts, halfWidth) {
+  const edgeA = [], edgeB = [];
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const nx = -Math.sin(p.angle), ny = Math.cos(p.angle);
+    edgeA.push({ x: p.x + nx * halfWidth, y: p.y + ny * halfWidth });
+    edgeB.push({ x: p.x - nx * halfWidth, y: p.y - ny * halfWidth });
+  }
+  return { edgeA, edgeB };
+}
+
+const trackPoints = buildTrack();
+const trackEdges = computeEdges(trackPoints, ROAD_HALF_WIDTH);
+
+function nearestDistToCenterline(x, y) {
+  let min = Infinity;
+  for (let i = 0; i < trackPoints.length; i++) {
+    const p = trackPoints[i];
+    const dx = x - p.x, dy = y - p.y;
+    const d = dx * dx + dy * dy;
+    if (d < min) min = d;
+  }
+  return Math.sqrt(min);
+}
+
+// ---------------------------------------------------------------------------
+// Car physics constants
+// ---------------------------------------------------------------------------
+const ACCEL = 260;
+const BRAKE_DECEL = 340;
+const REV_ACCEL = 180;
+const COAST_DRAG = 90;
+const MAX_SPEED = 320;
+const MAX_REVERSE_SPEED = 140;
+const MIN_DRIFT_SPEED = 60;
+const GRASS_DRAG_RATE = 3.5;
+const CAR_LENGTH = 20, CAR_WIDTH = 11;
+
+const BASE_RATE = 500;
+const GAME_DURATION = 60;
+
+let car = { x: 250, y: TOP_Y, heading: 0, vx: 0, vy: 0 };
+let keys = { up: false, down: false, left: false, right: false, hand: false };
+
+let running = false;
+let score = 0;
+let comboMultiplier = 1;
+let currentBank = 0;
+let prevIsDrifting = false;
+let gameTimeRemaining = GAME_DURATION;
+
+let trail = []; // { x, y, age }
+let trailSpawnTimer = 0;
+const TRAIL_MAX_POINTS = 300;
+const TRAIL_MAX_AGE = 2.2;
+const TRAIL_SPAWN_INTERVAL = 0.045;
+
+let msgTimer = 0;
+function showMessage(text, ms) {
+  msgEl.textContent = text;
+  msgTimer = ms || 1200;
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// ---------------------------------------------------------------------------
+// Input handling
+// ---------------------------------------------------------------------------
+const DRIVE_CODES = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space']);
+
+function setKeyState(code, value) {
+  switch (code) {
+    case 'ArrowUp': case 'KeyW': keys.up = value; break;
+    case 'ArrowDown': case 'KeyS': keys.down = value; break;
+    case 'ArrowLeft': case 'KeyA': keys.left = value; break;
+    case 'ArrowRight': case 'KeyD': keys.right = value; break;
+    case 'Space': keys.hand = value; break;
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  if (document.activeElement === nameInput) return;
+  if (!DRIVE_CODES.has(e.code)) return;
+  e.preventDefault();
+  setKeyState(e.code, true);
+});
+window.addEventListener('keyup', (e) => {
+  if (document.activeElement === nameInput) return;
+  if (!DRIVE_CODES.has(e.code)) return;
+  e.preventDefault();
+  setKeyState(e.code, false);
+});
+
+// ---------------------------------------------------------------------------
+// Game lifecycle
+// ---------------------------------------------------------------------------
+startBtn.addEventListener('click', () => {
+  ensureAudio();
+  ensureLoopingAudio();
+  playerName = (nameInput.value || '').trim() || 'Drifter';
+  localStorage.setItem('driftLastName', playerName);
+  currentDifficulty = DIFFICULTIES[currentDifficultyKey];
+  best = getBestForName(playerName);
+  bestEl.textContent = best;
+  startOverlay.classList.remove('show');
+  resetGame();
+});
+
+switchPlayerBtn.addEventListener('click', () => {
+  running = false;
+  silenceLoopingAudio();
+  overlay.classList.remove('show');
+  startOverlay.classList.add('show');
+});
+
+restartBtn.addEventListener('click', () => {
+  resetGame();
+});
+
+function resetGame() {
+  car.x = 250; car.y = TOP_Y; car.heading = 0; car.vx = 0; car.vy = 0;
+  keys = { up: false, down: false, left: false, right: false, hand: false };
+  score = 0;
+  comboMultiplier = 1;
+  currentBank = 0;
+  prevIsDrifting = false;
+  gameTimeRemaining = GAME_DURATION;
+  trail = [];
+  trailSpawnTimer = 0;
+  scoreEl.textContent = score;
+  bestEl.textContent = best;
+  timeEl.textContent = Math.ceil(gameTimeRemaining);
+  driftReadoutEl.style.display = 'none';
+  msgEl.textContent = '';
+  overlay.classList.remove('show');
+  running = true;
+  lastTs = null;
+  requestAnimationFrame(loop);
+}
+
+function endGame() {
+  running = false;
+  silenceLoopingAudio();
+  if (score > best) {
+    best = score;
+    setBestForName(playerName, best);
+  }
+  bestEl.textContent = best;
+  overlayTitle.textContent = "Time's Up!";
+  overlayScore.textContent = `${playerName}, you scored ${score} pts! Best: ${best} pts`;
+  overlay.classList.add('show');
+}
+
+// ---------------------------------------------------------------------------
+// Physics + scoring update
+// ---------------------------------------------------------------------------
+function update(dtSec) {
+  gameTimeRemaining -= dtSec;
+  if (gameTimeRemaining <= 0) {
+    gameTimeRemaining = 0;
+    timeEl.textContent = 0;
+    updateMessageTimer(dtSec);
+    endGame();
+    return;
+  }
+  timeEl.textContent = Math.ceil(gameTimeRemaining);
+
+  const prevSpeed = Math.hypot(car.vx, car.vy);
+  const turnDamp = clamp(prevSpeed / 50, 0, 1);
+  let steerDir = 0;
+  if (keys.left) steerDir -= 1;
+  if (keys.right) steerDir += 1;
+  car.heading += steerDir * currentDifficulty.turnRate * dtSec * turnDamp;
+
+  const fwd = { x: Math.cos(car.heading), y: Math.sin(car.heading) };
+  const right = { x: -Math.sin(car.heading), y: Math.cos(car.heading) };
+  let vLong = car.vx * fwd.x + car.vy * fwd.y;
+  let vLat = car.vx * right.x + car.vy * right.y;
+
+  if (keys.up) {
+    vLong += ACCEL * dtSec;
+  }
+  if (keys.down) {
+    vLong -= (vLong > 0 ? BRAKE_DECEL : REV_ACCEL) * dtSec;
+  }
+  if (!keys.up && !keys.down) {
+    if (vLong > 0) vLong = Math.max(0, vLong - COAST_DRAG * dtSec);
+    else if (vLong < 0) vLong = Math.min(0, vLong + COAST_DRAG * dtSec);
+  }
+  vLong = clamp(vLong, -MAX_REVERSE_SPEED, MAX_SPEED);
+
+  const gripRate = keys.hand ? currentDifficulty.gripDrift : currentDifficulty.gripStable;
+  vLat *= Math.exp(-gripRate * dtSec);
+
+  car.vx = vLong * fwd.x + vLat * right.x;
+  car.vy = vLong * fwd.y + vLat * right.y;
+
+  const distToCenter = nearestDistToCenterline(car.x, car.y);
+  const offTrack = distToCenter > ROAD_HALF_WIDTH;
+  if (offTrack) {
+    const grassDecay = Math.exp(-GRASS_DRAG_RATE * dtSec);
+    car.vx *= grassDecay;
+    car.vy *= grassDecay;
+  }
+
+  car.x += car.vx * dtSec;
+  car.y += car.vy * dtSec;
+
+  const speed = Math.hypot(car.vx, car.vy);
+  const velDir = Math.atan2(car.vy, car.vx);
+  let diffDeg = (velDir - car.heading) * 180 / Math.PI;
+  diffDeg = ((diffDeg + 180) % 360 + 360) % 360 - 180;
+  const slipAngleDeg = Math.abs(diffDeg);
+  const forwardOk = vLong > 15;
+
+  const isDrifting = !offTrack && speed > MIN_DRIFT_SPEED && slipAngleDeg > currentDifficulty.driftAngleMin && forwardOk;
+
+  if (isDrifting) {
+    const angleBonus = clamp((slipAngleDeg - currentDifficulty.driftAngleMin) / (65 - currentDifficulty.driftAngleMin), 0, 1);
+    const speedFactor = clamp(speed / MAX_SPEED, 0, 1);
+    currentBank += BASE_RATE * angleBonus * speedFactor * comboMultiplier * dtSec;
+  }
+
+  if (prevIsDrifting && !isDrifting) {
+    if (currentBank >= 1) {
+      if (offTrack) {
+        const banked = Math.round((currentBank * 0.4) / 10) * 10;
+        score += banked;
+        comboMultiplier = 1;
+        showMessage('CRASHED OUT!', 1300);
+        playCrashThud();
+      } else {
+        const banked = Math.round(currentBank / 10) * 10;
+        score += banked;
+        comboMultiplier = Math.min(5, comboMultiplier + 0.5);
+        showMessage(`+${banked} DRIFT!  x${comboMultiplier.toFixed(1)}`, 1300);
+        playDriftChime();
+      }
+      scoreEl.textContent = score;
+    }
+    currentBank = 0;
+  }
+  prevIsDrifting = isDrifting;
+
+  if (isDrifting) {
+    driftReadoutEl.style.display = 'flex';
+    driftBankEl.textContent = Math.round(currentBank);
+    comboLabelEl.textContent = `x${comboMultiplier.toFixed(1)}`;
+  } else {
+    driftReadoutEl.style.display = 'none';
+  }
+
+  updateTrail(dtSec, isDrifting, fwd, right);
+  updateLoopingAudio(speed, isDrifting, slipAngleDeg);
+  updateMessageTimer(dtSec);
+}
+
+function updateMessageTimer(dtSec) {
+  if (msgTimer > 0) {
+    msgTimer -= dtSec * 1000;
+    if (msgTimer <= 0) msgEl.textContent = '';
+  }
+}
+
+function updateTrail(dtSec, isDrifting, fwd, right) {
+  for (let i = 0; i < trail.length; i++) trail[i].age += dtSec;
+  trail = trail.filter(p => p.age < TRAIL_MAX_AGE);
+
+  if (isDrifting) {
+    trailSpawnTimer -= dtSec;
+    if (trailSpawnTimer <= 0) {
+      trailSpawnTimer = TRAIL_SPAWN_INTERVAL;
+      const rearX = car.x - fwd.x * (CAR_LENGTH / 2);
+      const rearY = car.y - fwd.y * (CAR_LENGTH / 2);
+      const off = CAR_WIDTH * 0.38;
+      trail.push({ x: rearX + right.x * off, y: rearY + right.y * off, age: 0 });
+      trail.push({ x: rearX - right.x * off, y: rearY - right.y * off, age: 0 });
+      while (trail.length > TRAIL_MAX_POINTS) trail.shift();
+    }
+  } else {
+    trailSpawnTimer = 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+function drawGrass() {
+  const grad = ctx.createLinearGradient(0, 0, W, H);
+  grad.addColorStop(0, '#3a9d4f');
+  grad.addColorStop(0.5, '#2f8a44');
+  grad.addColorStop(1, '#256e37');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawRoad() {
+  const { edgeA, edgeB } = trackEdges;
+  const path = new Path2D();
+  path.moveTo(edgeA[0].x, edgeA[0].y);
+  for (let i = 1; i < edgeA.length; i++) path.lineTo(edgeA[i].x, edgeA[i].y);
+  path.closePath();
+  path.moveTo(edgeB[0].x, edgeB[0].y);
+  for (let i = 1; i < edgeB.length; i++) path.lineTo(edgeB[i].x, edgeB[i].y);
+  path.closePath();
+  ctx.fillStyle = '#4a4d52';
+  ctx.fill(path, 'evenodd');
+}
+
+function drawCurbs() {
+  const { edgeA, edgeB } = trackEdges;
+  const n = edgeA.length;
+  const blockSize = 5;
+  ctx.lineWidth = 7;
+  ctx.lineCap = 'butt';
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const color = Math.floor(i / blockSize) % 2 === 0 ? '#c1121f' : '#f1f1f1';
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(edgeA[i].x, edgeA[i].y);
+    ctx.lineTo(edgeA[j].x, edgeA[j].y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(edgeB[i].x, edgeB[i].y);
+    ctx.lineTo(edgeB[j].x, edgeB[j].y);
+    ctx.stroke();
+  }
+}
+
+function drawStartFinish() {
+  const p = trackPoints[0];
+  const squares = 6;
+  const squareSize = (ROAD_HALF_WIDTH * 2) / squares;
+  const stripeThickness = 8;
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(p.angle);
+  for (let j = 0; j < squares; j++) {
+    ctx.fillStyle = j % 2 === 0 ? '#f4f4f4' : '#151515';
+    ctx.fillRect(-stripeThickness / 2, -ROAD_HALF_WIDTH + j * squareSize, stripeThickness, squareSize);
+  }
+  ctx.restore();
+}
+
+function drawTrail() {
+  for (let i = 0; i < trail.length; i++) {
+    const p = trail[i];
+    const alpha = clamp(1 - p.age / TRAIL_MAX_AGE, 0, 1) * 0.55;
+    ctx.fillStyle = `rgba(20,20,20,${alpha})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawCar() {
+  ctx.save();
+  ctx.translate(car.x, car.y);
+  ctx.rotate(car.heading);
+  const L = CAR_LENGTH, Wd = CAR_WIDTH;
+  ctx.fillStyle = '#d9412e';
+  ctx.strokeStyle = '#7a1f13';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.rect(-L / 2, -Wd / 2, L, Wd);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#1a2a33';
+  ctx.fillRect(L * 0.05, -Wd * 0.32, L * 0.32, Wd * 0.64);
+  ctx.fillStyle = '#fff6c8';
+  ctx.beginPath();
+  ctx.arc(L / 2 - 2, -Wd / 2 + 2, 1.6, 0, Math.PI * 2);
+  ctx.arc(L / 2 - 2, Wd / 2 - 2, 1.6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  drawGrass();
+  drawRoad();
+  drawCurbs();
+  drawStartFinish();
+  drawTrail();
+  drawCar();
+}
+
+// ---------------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------------
+let lastTs = null;
+function loop(ts) {
+  if (!running) return;
+  if (lastTs === null) lastTs = ts;
+  const dt = Math.min(ts - lastTs, 100);
+  lastTs = ts;
+
+  update(dt / 1000);
+  draw();
+
+  if (running) requestAnimationFrame(loop);
+}
+
+// Initial static paint before the game starts
+draw();
+</script>
+</body>
+</html>
